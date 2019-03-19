@@ -1,0 +1,221 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#Chapter 5
+
+```{r}
+library(tm)
+library(topicmodels)
+library(dplyr)
+library(tidytext)
+library(ggplot2)
+library(methods)
+library(quanteda)
+library(tidyr)
+library(Matrix)
+library(janeaustenr)
+library(purrr)
+library(tm.plugin.webmining)
+library(stringr)
+```
+
+```{r}
+AssociatedPress
+```
+```{r}
+terms <- Terms(AssociatedPress)
+terms %>% head()
+```
+```{r}
+ap_td <- tidy(AssociatedPress) #将DTM转为TIDYTEXT
+ap_td
+```
+```{r}
+ap_sentiments <- ap_td %>% 
+  inner_join(get_sentiments("bing"), by = c(term = "word"))
+ap_sentiments
+```
+```{r}
+ap_sentiments %>% 
+  count(sentiment, term, wt = count)
+
+ap_sentiments %>% 
+  count(sentiment, term, wt = count) %>% 
+  ungroup() %>% 
+  filter(n >= 200) %>% 
+  mutate(n = ifelse(sentiment == "negative", -n, n)) %>% 
+  ggplot(aes(reorder(term, n), n, fill = sentiment)) +
+  geom_col() +
+  ylab("Contribution to sentiment") +
+  coord_flip()
+```
+```{r}
+data_corpus_inaugural
+class(data_corpus_inaugural)
+inaug_dfm <- dfm(data_corpus_inaugural)
+inaug_dfm
+```
+```{r}
+inaug_td <- tidy(inaug_dfm)
+inaug_td
+```
+```{r}
+inaug_tf_idf <- inaug_td %>% 
+  bind_tf_idf(term = term, document = document, n = count) %>% 
+  arrange(desc(tf_idf))
+inaug_tf_idf
+```
+```{r fig.height=12, fig.width=12}
+inaug_tf_idf %>% 
+  filter(document %in% c("1861-Lincoln", "1933-Roosevelt", "1961-Kennedy", "2009-Obama"), term != "-") %>% 
+  group_by(document) %>% 
+  top_n(n = 10, wt = tf_idf) %>%
+  ungroup() %>% 
+  ggplot(aes(reorder(term, tf_idf), tf_idf, fill = document)) +
+  geom_col() +
+  xlab("Terms") +
+  facet_wrap(~ document, ncol = 2, scales = "free") +
+  coord_flip()
+```
+```{r}
+year_term_counts <- inaug_td %>% 
+  extract(document, "year", "(\\d+)", convert = T) %>% 
+  complete(year, term, fill = list(count = 0)) %>% 
+  group_by(year) %>% 
+  mutate(year_total = sum(count))
+year_term_counts
+```
+```{r}
+year_term_counts %>% 
+  filter(term %in% c("god", "america", "foreign", "union", "constitution", "freedom")) %>% 
+  ggplot(aes(year, count / year_total)) +
+  geom_point() +
+  geom_smooth() +
+  facet_wrap(~ term, scales = "free_y") + #y轴在不同分图中范围不同
+  scale_y_continuous(labels = scales::percent_format()) + #y轴显示百分比
+  ylab("% frequency of word in inaugural address")
+```
+```{r}
+ap_td %>% cast_dtm(document = document, term = term, value = count) #tidy转为dtm
+ap_td %>% cast_dfm(document = document, term = term, value = count) #tidy转为dfm
+```
+```{r}
+m <- ap_td %>% cast_sparse(row = document, column = term, value = count)
+dim(m)
+```
+```{r}
+austen_dtm <- austen_books() %>% 
+  unnest_tokens(input = text, output = word) %>% 
+  count(book, word) %>% 
+  cast_dtm(document = book, term = word, value = n)
+austen_dtm
+```
+```{r}
+data("acq")
+acq
+acq[[1]]
+```
+```{r}
+acq_td <- tidy(acq)
+acq_td
+```
+```{r}
+acq_tokens <- acq_td %>% 
+  select(-places) %>% 
+  unnest_tokens(input = text, output = word) %>% 
+  anti_join(stop_words, by = "word")
+acq_tokens
+acq_tokens %>% count(word, sort = T)
+```
+```{r}
+acq_tokens %>% 
+  count(id, word) %>% 
+  bind_tf_idf(document = id, term = word, n = n) %>% 
+  arrange(desc(tf_idf))
+```
+```{r}
+company <- c("Microsoft", "Apple", "Google", "Amazon", 
+             "Facebook", "Twitter", "IBM", "Yahoo", "Netflix")
+symbol <- c("MSFT", "AAPL", "GOOG", "AMZN", "FB", "TWTR", "IBM", "YHOO", "NFLX")
+download_articles <- function(symbol){
+  WebCorpus(GoogleFinanceSource(paste0("NASDAQ:", symbol)))
+}
+stock_articles <- data_frame(company = company, symbol = symbol) %>% 
+  mutate(corpus = map(symbol, download_articles))
+stock_articles  #报错
+```
+```{r}
+load("./tidy-text-mining-master/data/stock_articles.rda") #直接用附带数据，绝对路径
+stock_articles
+```
+```{r}
+stock_tokens <- stock_articles %>% 
+  unnest(map(corpus, tidy)) %>% 
+  unnest_tokens(input = text, output = word) %>% 
+  select(company, datetimestamp, word, id, heading)
+stock_tokens
+```
+```{r}
+stock_tf_idf <- stock_tokens %>% 
+  count(company, word) %>% 
+  filter(!str_detect(word, "\\d+"), !str_detect(word, "[\u4e00-\u9fa5]")) %>% #匹配中文
+  bind_tf_idf(term = word, document = company, n = n) %>% 
+  arrange(-tf_idf) #降序排列
+stock_tf_idf
+```
+```{r fig.height=8}
+stock_tf_idf %>% 
+  group_by(company) %>% 
+  top_n(n = 10, wt = tf_idf) %>% 
+  ungroup() %>% 
+  ggplot(aes(reorder(word, tf_idf), tf_idf, fill = company)) +
+  geom_col(show.legend = F) +
+  labs(x = "Terms", y = "tf_idf") +
+  facet_wrap(~ company, nrow = 3,scales = "free_y") +
+  coord_flip()
+```
+
+```{r}
+stock_tokens %>% 
+  anti_join(stop_words, by = "word") %>% 
+  count(word, id, sort = T) %>% 
+  inner_join(get_sentiments("afinn"), by = "word") %>% 
+  group_by(word) %>% 
+  summarise(contribution = sum(n * score)) %>% 
+  top_n(12, abs(contribution)) %>% 
+  ggplot(aes(reorder(word, contribution), contribution)) +
+  geom_col() +
+  labs(x = "Words", y = "Frequency of word * AFINN score") +
+  coord_flip()
+```
+```{r fig.height=8}
+stock_tokens %>% 
+  count(word) %>% 
+  inner_join(get_sentiments("loughran"), by = "word") %>% 
+  group_by(sentiment) %>% 
+  top_n(n = 5, wt = n) %>% 
+  ungroup() %>% 
+  ggplot(aes(reorder(word, n), n)) +
+  geom_col() +
+  labs(x = "Words", y ="Frequency") + 
+  facet_wrap(~ sentiment, scales = "free") +
+  coord_flip()
+```
+```{r}
+stock_sentiment_count <- stock_tokens %>% 
+  inner_join(get_sentiments("loughran"), by = "word") %>% 
+  count(sentiment, company) %>% 
+  spread(key = sentiment, value = n, fill = 0) #长数据变宽数据
+stock_sentiment_count
+```
+```{r}
+stock_sentiment_count %>% 
+  mutate(score = (positive - negative) / (positive + negative)) %>% 
+  ggplot(aes(reorder(company, score), score, fill = score > 0)) +
+  geom_col(show.legend = F) +
+  labs(x = "Company", y = "Score") +
+  coord_flip()
+```
+

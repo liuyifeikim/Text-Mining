@@ -1,0 +1,243 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+#Chapter 4
+
+```{r}
+pacman::p_load(dplyr, tidytext, janeaustenr)
+library(tidyr)
+library(ggplot2)
+library(igraph)
+pacman::p_load(ggraph)
+library(gutenbergr)
+library(stringr)
+pacman::p_load(widyr)
+```
+
+```{r}
+austen_bigrams <- austen_books() %>% 
+  unnest_tokens(input = text, output = bigram, token = "ngrams", n = 2) #两个词为一行
+austen_bigrams
+```
+```{r}
+austen_bigrams %>% count(bigram, sort = T)
+```
+```{r}
+bigrams_separated <- austen_bigrams %>% 
+  separate(bigram, c("word1", "word2"), sep = " ") #按分隔符分成两列
+bigrams_separated  
+```
+```{r}
+bigrams_filtered <- bigrams_separated %>% 
+  filter(!word1 %in% stop_words$word) %>% 
+  filter(!word2 %in% stop_words$word)
+bigram_counts <- bigrams_filtered %>% 
+  count(word1, word2, sort = T)
+bigram_counts
+```
+```{r}
+bigrams_united <- bigrams_filtered %>% 
+  unite(bigram, word1, word2, sep = " ") #按分隔符将多列合为一列，separate的相反
+bigrams_united
+```
+```{r}
+austen_books() %>% 
+  unnest_tokens(input = text, output = trigram, token = "ngrams", n = 3) %>% #分为3列
+  separate(trigram, c("word1", "word2", "word3"), sep = " ") %>% 
+  filter(!word1 %in% stop_words$word,
+         !word2 %in% stop_words$word,
+         !word3 %in% stop_words$word) %>% 
+  count(word1, word2, word3, sort = T)
+```
+```{r}
+bigrams_filtered %>% 
+  filter(word2 == "street") %>% 
+  count(book, word1, sort = T)
+```
+```{r}
+bigram_tf_idf <- bigrams_united %>% 
+  count(book, bigram) %>% 
+  bind_tf_idf(term = bigram, document = book, n = n) %>% 
+  arrange(desc(tf_idf))
+bigram_tf_idf
+```
+```{r fig.width = 10, fig.height = 10}
+bigram_tf_idf %>% 
+  group_by(book) %>% 
+  top_n(wt = tf_idf, n = 15) %>% 
+  ggplot(aes(reorder(bigram, tf_idf), tf_idf, fill = book)) +
+  geom_col(show.legend = F) +
+  facet_wrap(~ book, nrow = 2, scales = "free") +
+  theme(axis.text.y = element_text(size = 10),
+        axis.title.y = element_blank()) +
+  coord_flip()
+```
+```{r}
+bigrams_separated %>% 
+  filter(word1 == "not") %>% 
+  count(word1, word2, sort = T)
+```
+```{r}
+afinn <- get_sentiments("afinn")
+afinn
+```
+```{r}
+not_words <- bigrams_separated %>% 
+  filter(word1 == "not") %>% 
+  inner_join(afinn, by = c(word2 = "word")) %>% #连接列不同命
+  count(word2, score, sort = T) %>% 
+  ungroup()
+not_words
+```
+```{r}
+not_words %>% 
+  mutate(contribution = n * score) %>% 
+  arrange(desc(abs(contribution))) %>% #按绝对值排序
+  head(20) %>% 
+  ggplot(aes(reorder(word2, contribution), contribution, fill = contribution > 0)) +
+           geom_col(show.legend = F) +
+           xlab("Words preceded by \"not\"") +
+           ylab("Sentiment score * number of occurrences") +
+           coord_flip()
+```
+
+```{r}
+negation_words <- c("not", "no", "never", "without")
+negatied_words <- bigrams_separated %>% 
+  filter(word1 %in% negation_words) %>% 
+  inner_join(afinn, by = c(word2 = "word")) %>% 
+  count(word1, word2, score, sort = T) %>% 
+  ungroup()
+negatied_words
+```
+```{r fig.width = 10, fig.height = 10}
+negatied_words %>% 
+  group_by(word1) %>%   
+  mutate(contribution = n * score) %>% 
+  arrange(desc(abs(contribution))) %>% #按绝对值排序
+  top_n(wt = abs(contribution), n = 20) %>% 
+  ungroup() %>% 
+  ggplot(aes(reorder(word2, contribution), contribution, fill = contribution > 0)) +
+  geom_col(show.legend = F) +
+  xlab("Words preceded by \"not\"") +
+  ylab("Sentiment score * number of occurrences") +
+  facet_wrap(~ word1, scales = "free") +
+  coord_flip()
+```
+```{r}
+bigram_counts
+bigram_graph <- bigram_counts %>% 
+  filter(n > 20) %>% 
+  graph_from_data_frame()
+bigram_graph
+```
+```{r fig.width = 10, fig.height = 7}
+set.seed(2017)
+ggraph(bigram_graph, layout = "fr") +
+  geom_edge_link() +
+  geom_node_point() +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1)
+```
+```{r fig.width = 10, fig.height = 7}
+set.seed(2016)
+a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+ggraph(bigram_graph, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), show.legend = F, arrow = a, end_cap = circle(.07, "inches")) + 
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+  theme_void()
+```
+```{r}
+count_bigrams <- function(dataset){
+  dataset %>% 
+    unnest_tokens(input = text, output = bigram, token = "ngrams", n = 2) %>% 
+    separate(bigram, c("word1", "word2"), sep = " ") %>% 
+    filter(!word1 %in% stop_words$word,
+           !word2 %in% stop_words$word) %>% 
+    count(word1, word2, sort = T)
+}
+
+visualize_bigrams <- function(bigrams){
+  set.seed(2016)
+  a <- grid::arrow(type = "closed", length = unit(.15, "inches"))
+  bigrams %>% 
+  graph_from_data_frame() %>% 
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), show.legend = F, arrow = a, end_cap = circle(.07, "inches")) + 
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1) +
+  theme_void()
+}
+```
+
+```{r}
+kjv <- gutenberg_download(10)
+kjv
+```
+
+
+```{r fig.width = 10, fig.height = 7}
+kjv_bigrams <- kjv %>% 
+  count_bigrams()
+kjv_bigrams
+
+kjv_bigrams %>% 
+  filter(n > 40,
+         !str_detect(word1, "\\d"),
+         !str_detect(word2, "\\d")) %>% 
+  visualize_bigrams()
+```
+```{r}
+austen_selection_words <- austen_books() %>% 
+  filter(book == "Pride & Prejudice") %>% 
+  mutate(section = row_number() %/% 10) %>% 
+  filter(section > 0) %>% 
+  unnest_tokens(input = text, output = word, token = "words") %>% 
+  filter(!word %in% stop_words$word)
+austen_selection_words
+```
+```{r}
+word_pairs <- austen_selection_words %>% 
+  pairwise_count(word, section, sort = T)  #在同一部分内，单词对出现的次数
+word_pairs
+word_pairs %>% filter(item1 == "darcy")
+```
+```{r}
+word_cors <- austen_selection_words %>% 
+  group_by(word) %>% 
+  filter(n() >= 20) %>% 
+  pairwise_cor(item = word, feature = section, sort = T, method = "pearson") #等同于phi系数
+word_cors
+```
+```{r}
+word_cors %>% 
+  filter(item1 == "pounds")
+```
+```{r}
+word_cors %>% 
+  filter(item1 %in% c("elizabeth", "pounds", "married", "pride")) %>% 
+  group_by(item1) %>% 
+  top_n(wt = correlation, n = 6) %>% 
+  ungroup() %>% 
+  ggplot(aes(reorder(item2, correlation), correlation)) +
+  geom_col() + 
+  facet_wrap(~ item1, scales = "free") +
+  xlab("item2") +
+  coord_flip()
+```
+```{r fig.height = 8}
+set.seed(2016)
+word_cors %>% 
+  filter(correlation > 0.15) %>% 
+  graph_from_data_frame() %>% 
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(edge_alpha = correlation), show.legend = F) + #用相关系数调节边的透明度
+  geom_node_point(color = "lightblue", size = 5) +
+  geom_node_text(aes(label = name), repel = T) + #防止重叠
+  theme_void()
+```
+
+
+

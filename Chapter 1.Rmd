@@ -1,0 +1,144 @@
+---
+title: "Tidy"
+output: html_notebook
+---
+
+#Chapter 1
+
+```{r}
+library(dplyr)
+library(tidytext)
+library(tibble)
+library(janeaustenr)
+library(stringr)
+library(ggplot2)
+library(gutenbergr)
+library(tidyr)
+library(scales)
+```
+
+```{r}
+text <- c("Because I could not stop for Death -",
+          "He kindly stopped for me -",
+          "The Carriage held but just Ourselves -",
+          "and Immortality")
+text
+```
+
+```{r}
+text_df <- tibble(line = 1:4, text = text) #处理成一个文档一行
+text_df
+```
+
+```{r}
+text_df %>% unnest_tokens(input = text, output = word) #处理成一个单词一行
+```
+
+```{r}
+austen_books()
+glimpse(austen_books()) #两个变量，文本和书名，每一行文本都对应书名
+class(austen_books())
+table(austen_books()$book) #有几本书
+```
+
+```{r}
+original_books <- austen_books() %>% 
+  group_by(book) %>% 
+  mutate(linenumber = row_number(), 
+         chapter = cumsum(str_detect(text, regex("^CHAPTER \\d+$", ignore_case = T)))) %>% 
+  ungroup()
+original_books
+glimpse(original_books)
+table(original_books$chapter)
+```
+
+```{r}
+tidy_books <- original_books %>% unnest_tokens(input = text, output = word) #整洁形式：每行一个单词
+tidy_books
+```
+
+```{r}
+data("stop_words") #停用词数据
+stop_words
+```
+
+```{r}
+tidy_books <- tidy_books %>% anti_join(stop_words, by = "word") #删除停用词
+tidy_books
+```
+
+```{r}
+tidy_books %>% count(word, sort = T) #计数并排序
+```
+
+```{r}
+tidy_books %>% 
+  count(word, sort = T) %>% 
+  filter(n > 600) %>% 
+  mutate(word = reorder(word, n)) %>% 
+  ggplot(aes(word, n)) + 
+  geom_col() +   #geom_col = geom_bar(stat = "identity")
+  xlab(NULL) + 
+  coord_flip() 
+```
+
+```{r}
+hgwells <- gutenberg_download(c(35, 36, 5230, 159))
+hgwells
+glimpse(hgwells)
+```
+
+```{r}
+tidy_hgwells <- hgwells %>% 
+  unnest_tokens(input = text, output = word) %>% 
+  anti_join(stop_words)
+tidy_hgwells
+tidy_hgwells %>% count(word, sort = T)
+```
+
+```{r}
+bronte <- gutenberg_download(c(1260, 768, 969, 9182, 767))
+tidy_bronte <- bronte %>% 
+  unnest_tokens(input = text, output = word) %>% 
+  anti_join(stop_words)
+tidy_bronte
+```
+
+```{r}
+tidy_bronte %>% count(word, sort = T)
+```
+
+```{r}
+frequency <- bind_rows(mutate(tidy_bronte, author = "Bronte Sisters"),  #加一行author,堆叠数据
+                       mutate(tidy_hgwells, author = "H G Wells"),
+                       mutate(tidy_books, author = "Jane Austen")) %>%
+  mutate(word = str_extract(word, "[a-z']+")) %>%  #删除下划线
+  count(author, word) %>% #按作者统计词频
+  group_by(author) %>%
+  mutate(proportion = n / sum(n)) %>% #按照作者统计词频比例，sum是按照作者进行
+  select(-n) %>%  #去掉一行
+  spread(author, proportion) %>%  #将长数据转为宽数据，每列为一个作者，每行为一个单词
+  gather(author, proportion, `Bronte Sisters`:`H G Wells`)
+frequency
+```
+
+```{r}
+ggplot(frequency, aes(x = proportion, y = `Jane Austen`, color = abs(`Jane Austen` - proportion))) + 
+  geom_abline(color = "gray40", lty = 2) + 
+  geom_jitter(alpha = 0.1, size = 2.5, width = 0.3, height = 0.3) + 
+  geom_text(aes(label = word), check_overlap = T, vjust = 1.5) + 
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  scale_color_gradient(limits = c(0, 0.001), low = "darkslategray4", high = "gray75") +
+  facet_wrap(~author, ncol = 2) +
+  theme(legend.position = "none") +
+  labs(y = "Jane Austen", x = NULL)
+```
+
+```{r}
+cor.test(data = frequency[frequency$author == "Bronte Sisters",], ~ proportion + `Jane Austen`)
+cor.test(data = frequency[frequency$author == "H G Wells",], ~ proportion + `Jane Austen`)
+
+```
+
+
